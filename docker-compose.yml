@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  vpn-server:
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+    container_name: vpn-server
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "8000:8000/udp"
+    networks:
+      vpn-net:
+        ipv4_address: 172.25.0.2
+
+  vpn-client-icmp-ping:
+    profiles:
+      - client
+    build:
+      context: .
+      dockerfile: docker/client/Dockerfile
+    container_name: vpn-client-1
+    depends_on:
+      - vpn-server
+    environment:
+      - VPN_LOCAL_VIP=172.31.0.2
+    networks:
+      vpn-net:
+        ipv4_address: 172.25.0.3
+
+  vpn-client-icmp-ping2:
+    profiles:
+      - client
+    build:
+      context: .
+      dockerfile: docker/client/Dockerfile
+    container_name: vpn-client-2
+    depends_on:
+      - vpn-server
+    environment:
+      - VPN_LOCAL_VIP=172.31.0.3
+    networks:
+      vpn-net:
+        ipv4_address: 172.25.0.4
+
+  udp-echo-server:
+    image: alpine:latest
+    container_name: udp-echo-server
+    command: sh -c "apk add --no-cache socat && socat UDP4-LISTEN:${UDP_ECHO_PORT:-22840},fork PIPE"
+    ports:
+      - "${UDP_ECHO_PORT:-22840}:${UDP_ECHO_PORT:-22840}/udp"
+    networks:
+      vpn-net:
+        ipv4_address: 172.25.0.5
+
+networks:
+  vpn-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/24
