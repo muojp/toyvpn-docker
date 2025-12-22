@@ -2,7 +2,7 @@
 
 This repository provides a Docker-based environment for ToyVPN with additional testing utilities.
 
-**Note**: The ToyVPN implementation itself is from Google's [Android ToyVPN sample](https://android.googlesource.com/platform/development/+/master/samples/ToyVpn/). This repository is an independent wrapper that:
+**Note**: The ToyVPN implementation itself is from Google's [Android ToyVpn sample](https://android.googlesource.com/platform/development/+/master/samples/ToyVpn/). This repository is an independent wrapper that:
 - Packages ToyVPN in Docker containers for easy deployment and testing
 - Adds testing utilities (UDP echo server, multiple client support)
 - Provides a simple docker-compose configuration for local development
