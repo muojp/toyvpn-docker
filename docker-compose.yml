@@ -24,8 +24,6 @@ services:
     container_name: vpn-client-1
     depends_on:
       - vpn-server
-    environment:
-      - VPN_LOCAL_VIP=172.31.0.2
     networks:
       vpn-net:
         ipv4_address: 172.25.0.3
@@ -39,8 +37,6 @@ services:
     container_name: vpn-client-2
     depends_on:
       - vpn-server
-    environment:
-      - VPN_LOCAL_VIP=172.31.0.3
     networks:
       vpn-net:
         ipv4_address: 172.25.0.4

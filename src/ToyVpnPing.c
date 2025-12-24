@@ -2,8 +2,10 @@
  * ToyVpnPing.c
  * A simple client to ping through ToyVpnServer for performance testing.
  *
- * Usage: ./ToyVpnPing <server_ip> <server_port> <secret> <local_virtual_ip> <remote_virtual_ip>
- * Example: ./ToyVpnPing 127.0.0.1 8000 test 10.0.0.2 10.0.0.1
+ * Usage: ./ToyVpnPing <server_ip> <server_port> <secret> <remote_virtual_ip>
+ * Example: ./ToyVpnPing 127.0.0.1 8000 test 10.0.0.1
+ *
+ * The local virtual IP is automatically obtained from the server during handshake.
  */
 
 #include <stdio.h>
@@ -44,17 +46,51 @@ unsigned short checksum(void *b, int len) {
     return result;
 }
 
+// Parse server parameters to extract assigned virtual IP
+// Parameters format: "m,1400 a,172.31.0.2,32 d,8.8.8.8 r,0.0.0.0,0 "
+int parse_virtual_ip(const char *params, char *vip_out, size_t vip_size) {
+    // Look for "a,<IP>,<prefix>" pattern
+    const char *a_param = strstr(params, "a,");
+    if (!a_param) {
+        fprintf(stderr, "Error: No address parameter found in server response\n");
+        return -1;
+    }
+
+    // Skip "a,"
+    const char *ip_start = a_param + 2;
+
+    // Find the next comma (separator before prefix)
+    const char *ip_end = strchr(ip_start, ',');
+    if (!ip_end) {
+        fprintf(stderr, "Error: Malformed address parameter\n");
+        return -1;
+    }
+
+    // Copy the IP address
+    size_t ip_len = ip_end - ip_start;
+    if (ip_len >= vip_size) {
+        fprintf(stderr, "Error: IP address too long\n");
+        return -1;
+    }
+
+    memcpy(vip_out, ip_start, ip_len);
+    vip_out[ip_len] = '\0';
+
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
-    if (argc != 6) {
-        printf("Usage: %s <server_ip> <server_port> <secret> <local_virtual_ip> <remote_virtual_ip>\n", argv[0]);
+    if (argc != 5) {
+        printf("Usage: %s <server_ip> <server_port> <secret> <remote_virtual_ip>\n", argv[0]);
+        printf("Note: Local virtual IP is automatically assigned by the server\n");
         return 1;
     }
 
     char *server_ip = argv[1];
     int server_port = atoi(argv[2]);
     char *secret = argv[3];
-    char *local_vip = argv[4];
-    char *remote_vip = argv[5];
+    char *remote_vip = argv[4];
+    char local_vip[INET_ADDRSTRLEN] = {0};
 
     int sock;
     struct sockaddr_in server_addr;
@@ -115,6 +151,13 @@ int main(int argc, char *argv[]) {
             // Ensure null termination for printing
             param_buf[n < 1023 ? n : 1023] = 0;
             printf("Connection established. Server parameters: %s\n", param_buf + 1);
+
+            // Parse and extract the assigned virtual IP
+            if (parse_virtual_ip(param_buf + 1, local_vip, sizeof(local_vip)) != 0) {
+                fprintf(stderr, "Error: Failed to parse virtual IP from server parameters\n");
+                return 1;
+            }
+            printf("Assigned virtual IP: %s\n", local_vip);
         } else {
             fprintf(stderr, "Error: Received unexpected packet during handshake\n");
             return 1;

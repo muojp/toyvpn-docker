@@ -113,6 +113,92 @@ static void build_parameters(char *parameters, int size, int argc, char **argv)
     parameters[0] = 0;
 }
 
+// Build parameters with client-specific IP address
+static void build_client_parameters(char *parameters, int size, uint32_t client_ip, int argc, char **argv)
+{
+    int offset = 0;
+
+    // Convert client IP to string (network byte order to host byte order)
+    struct in_addr addr;
+    addr.s_addr = client_ip;
+    char ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &addr, ip_str, sizeof(ip_str));
+
+    printf("DEBUG: Generating parameters with IP: %s\n", ip_str);
+
+    for (int i = 4; i < argc; ++i) {
+        char *original_param = argv[i];
+        char *parameter = original_param;
+        int length = strlen(parameter);
+        char delimiter = ',';
+
+        if (length == 2 && parameter[0] == '-') {
+            ++parameter;
+            --length;
+            delimiter = ' ';
+        }
+
+        printf("DEBUG: Processing parameter: %s\n", parameter);
+
+        // Check if this is the address parameter flag '-a' or direct 'a,'
+        if (length == 1 && parameter[0] == 'a') {
+            // This is '-a' flag format, next two args are IP and prefix
+            if (i + 2 < argc) {
+                char new_param[128];
+                snprintf(new_param, sizeof(new_param), "a,%s,32", ip_str);
+                int new_length = strlen(new_param);
+
+                printf("DEBUG: Replacing -a flag address with: %s\n", new_param);
+
+                if (offset + new_length >= size) {
+                    puts("Parameters are too large");
+                    exit(1);
+                }
+
+                parameters[offset] = delimiter;
+                memcpy(&parameters[offset + 1], new_param, new_length);
+                offset += 1 + new_length;
+
+                // Skip next two arguments (IP and prefix)
+                i += 2;
+                continue;
+            }
+        } else if (length >= 2 && parameter[0] == 'a' && parameter[1] == ',') {
+            // Direct 'a,IP,prefix' format
+            char new_param[128];
+            snprintf(new_param, sizeof(new_param), "a,%s,32", ip_str);
+            int new_length = strlen(new_param);
+
+            printf("DEBUG: Replacing address parameter with: %s\n", new_param);
+
+            if (offset + new_length >= size) {
+                puts("Parameters are too large");
+                exit(1);
+            }
+
+            parameters[offset] = delimiter;
+            memcpy(&parameters[offset + 1], new_param, new_length);
+            offset += 1 + new_length;
+            continue;
+        }
+
+        // Normal parameter - copy as is
+        if (offset + length >= size) {
+            puts("Parameters are too large");
+            exit(1);
+        }
+
+        parameters[offset] = delimiter;
+        memcpy(&parameters[offset + 1], parameter, length);
+        offset += 1 + length;
+    }
+
+    memset(&parameters[offset], ' ', size - offset);
+    parameters[0] = 0;
+
+    printf("DEBUG: Final parameters: %s\n", parameters + 1);
+}
+
 //-----------------------------------------------------------------------------
 
 struct Session {
@@ -129,9 +215,6 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    char parameters[1024];
-    build_parameters(parameters, sizeof(parameters), argc, argv);
-
     int interface = get_interface(argv[1]);
     int tunnel = create_socket(argv[2]);
     if (tunnel < 0) {
@@ -142,6 +225,38 @@ int main(int argc, char **argv)
     char *secret = argv[3];
     std::map<std::string, Session> sessions;
     std::map<uint32_t, std::string> routing_table;
+
+    // IP allocation state - start from 172.31.0.2, increment for each client
+    // Parse base IP from parameters to determine starting point
+    uint32_t next_available_ip = 0;
+    for (int i = 4; i < argc; ++i) {
+        if (strncmp(argv[i], "a,", 2) == 0) {
+            // Found address parameter like "a,172.31.0.2,32"
+            char ip_str[32];
+            const char *comma = strchr(argv[i] + 2, ',');
+            if (comma) {
+                size_t len = comma - (argv[i] + 2);
+                if (len < sizeof(ip_str)) {
+                    memcpy(ip_str, argv[i] + 2, len);
+                    ip_str[len] = '\0';
+                    struct in_addr addr;
+                    if (inet_pton(AF_INET, ip_str, &addr) == 1) {
+                        next_available_ip = addr.s_addr;
+                        printf("Starting IP allocation from: %s\n", ip_str);
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    if (next_available_ip == 0) {
+        // Default to 172.31.0.2 if not specified
+        struct in_addr addr;
+        inet_pton(AF_INET, "172.31.0.2", &addr);
+        next_available_ip = addr.s_addr;
+        printf("Using default starting IP: 172.31.0.2\n");
+    }
 
     // Put the tunnel into non-blocking mode.
     fcntl(tunnel, F_SETFL, O_NONBLOCK);
@@ -172,10 +287,22 @@ int main(int argc, char **argv)
                 struct iphdr *ip = (struct iphdr *)packet;
                 if (ip->version == 4) {
                     uint32_t dest_ip = ip->daddr;
+                    char dest_ip_str[INET_ADDRSTRLEN];
+                    inet_ntop(AF_INET, &dest_ip, dest_ip_str, sizeof(dest_ip_str));
+
                     if (routing_table.count(dest_ip)) {
                         Session &s = sessions[routing_table[dest_ip]];
+
+                        char src_ip_str[INET_ADDRSTRLEN];
+                        inet_ntop(AF_INET, &ip->saddr, src_ip_str, sizeof(src_ip_str));
+
+                        printf("[TUN->Client] Routing packet: %s -> %s (%d bytes)\n",
+                               src_ip_str, dest_ip_str, length);
+
                         sendto(tunnel, packet, length, MSG_NOSIGNAL, (sockaddr *)&s.addr, s.addrlen);
                         s.last_active = now;
+                    } else {
+                        printf("[TUN->Client] No route found for destination: %s (dropped)\n", dest_ip_str);
                     }
                 }
             }
@@ -212,23 +339,67 @@ int main(int argc, char **argv)
                         }
                     } else if (strcmp(secret, &packet[1]) == 0) {
                         // Handshake
+                        bool is_new_session = (sessions.find(addr_key) == sessions.end());
                         Session &s = sessions[addr_key];
                         s.addr = client_addr;
                         s.addrlen = addrlen;
                         s.last_active = now;
-                        
+
                         char ip_str[INET6_ADDRSTRLEN];
                         void *src_addr;
+                        int port;
                         if (client_addr.ss_family == AF_INET) {
                             src_addr = &((struct sockaddr_in *)&client_addr)->sin_addr;
+                            port = ntohs(((struct sockaddr_in *)&client_addr)->sin_port);
                         } else {
                             src_addr = &((struct sockaddr_in6 *)&client_addr)->sin6_addr;
+                            port = ntohs(((struct sockaddr_in6 *)&client_addr)->sin6_port);
                         }
                         inet_ntop(client_addr.ss_family, src_addr, ip_str, sizeof(ip_str));
-                        printf("New client handshake from %s\n", ip_str);
+
+                        // Allocate a new virtual IP if this is a new session
+                        if (is_new_session || s.virtual_ip == 0) {
+                            // Find next available IP (skip already allocated ones)
+                            uint32_t candidate_ip = next_available_ip;
+                            while (routing_table.count(candidate_ip) > 0) {
+                                // Increment IP address in network byte order
+                                uint32_t host_order = ntohl(candidate_ip);
+                                host_order++;
+                                candidate_ip = htonl(host_order);
+                            }
+
+                            // Clean up old routing entry if IP changed
+                            if (s.virtual_ip != 0 && s.virtual_ip != candidate_ip) {
+                                routing_table.erase(s.virtual_ip);
+                            }
+
+                            s.virtual_ip = candidate_ip;
+                            routing_table[candidate_ip] = addr_key;
+
+                            // Update next_available_ip for next client
+                            uint32_t host_order = ntohl(candidate_ip);
+                            host_order++;
+                            next_available_ip = htonl(host_order);
+
+                            char virtual_ip_str[INET_ADDRSTRLEN];
+                            inet_ntop(AF_INET, &s.virtual_ip, virtual_ip_str, sizeof(virtual_ip_str));
+                            printf("New client handshake from %s:%d - Assigned virtual IP: %s\n",
+                                   ip_str, port, virtual_ip_str);
+                        } else {
+                            char virtual_ip_str[INET_ADDRSTRLEN];
+                            inet_ntop(AF_INET, &s.virtual_ip, virtual_ip_str, sizeof(virtual_ip_str));
+                            printf("Reconnecting client from %s:%d - Keeping virtual IP: %s\n",
+                                   ip_str, port, virtual_ip_str);
+                        }
+
+                        // Build and send client-specific parameters
+                        char client_parameters[1024];
+                        build_client_parameters(client_parameters, sizeof(client_parameters),
+                                              s.virtual_ip, argc, argv);
 
                         for (int i = 0; i < 3; ++i) {
-                            sendto(tunnel, parameters, sizeof(parameters), MSG_NOSIGNAL, (sockaddr *)&client_addr, addrlen);
+                            sendto(tunnel, client_parameters, sizeof(client_parameters),
+                                   MSG_NOSIGNAL, (sockaddr *)&client_addr, addrlen);
                         }
                     }
                 } else {
@@ -236,23 +407,40 @@ int main(int argc, char **argv)
                     if (sessions.count(addr_key)) {
                         Session &s = sessions[addr_key];
                         s.last_active = now;
-                        
+
                         struct iphdr *ip = (struct iphdr *)packet;
                         if (ip->version == 4) {
-                            // Learn/Update routing
-                            if (s.virtual_ip != ip->saddr) {
-                                if (s.virtual_ip != 0) routing_table.erase(s.virtual_ip);
-                                s.virtual_ip = ip->saddr;
-                                routing_table[s.virtual_ip] = addr_key;
-                                
-                                char vip_str[INET_ADDRSTRLEN];
-                                inet_ntop(AF_INET, &ip->saddr, vip_str, sizeof(vip_str));
-                                printf("Routing updated: Virtual IP %s -> Client Session\n", vip_str);
-                            }
-                            if (write(interface, packet, length) < 0) {
-                                perror("write to tun");
+                            char src_ip_str[INET_ADDRSTRLEN];
+                            char dst_ip_str[INET_ADDRSTRLEN];
+                            inet_ntop(AF_INET, &ip->saddr, src_ip_str, sizeof(src_ip_str));
+                            inet_ntop(AF_INET, &ip->daddr, dst_ip_str, sizeof(dst_ip_str));
+
+                            // Verify the source IP matches assigned virtual IP
+                            if (s.virtual_ip != 0 && s.virtual_ip != ip->saddr) {
+                                char expected_ip_str[INET_ADDRSTRLEN];
+                                inet_ntop(AF_INET, &s.virtual_ip, expected_ip_str, sizeof(expected_ip_str));
+                                printf("[Client->TUN] WARNING: Source IP mismatch! Expected %s, got %s (dropped)\n",
+                                       expected_ip_str, src_ip_str);
+                            } else {
+                                // Learn/Update routing if not yet set
+                                if (s.virtual_ip != ip->saddr) {
+                                    if (s.virtual_ip != 0) routing_table.erase(s.virtual_ip);
+                                    s.virtual_ip = ip->saddr;
+                                    routing_table[s.virtual_ip] = addr_key;
+
+                                    printf("Routing learned: Virtual IP %s -> Client Session\n", src_ip_str);
+                                }
+
+                                printf("[Client->TUN] Forwarding packet: %s -> %s (%d bytes)\n",
+                                       src_ip_str, dst_ip_str, length);
+
+                                if (write(interface, packet, length) < 0) {
+                                    perror("write to tun");
+                                }
                             }
                         }
+                    } else {
+                        printf("[Client->TUN] Packet from unknown session (dropped)\n");
                     }
                 }
             }

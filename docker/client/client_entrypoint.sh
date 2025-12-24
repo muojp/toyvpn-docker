@@ -5,7 +5,6 @@
 SERVER_IP=${VPN_SERVER_IP:-vpn-server}
 SERVER_PORT=${VPN_SERVER_PORT:-8000}
 SECRET=${VPN_SECRET:-test}
-LOCAL_VIP=${VPN_LOCAL_VIP:-172.31.0.2}
 TARGET=${1:-192.168.0.1}
 
 # Resolve hostname to IP if needed
@@ -27,4 +26,5 @@ else
 fi
 
 echo "Pinging ${REMOTE_VIP} via VPN server ${SERVER_IP}:${SERVER_PORT}..."
-exec ./ToyVpnPing "$SERVER_IP" "$SERVER_PORT" "$SECRET" "$LOCAL_VIP" "$REMOTE_VIP"
+echo "Note: Local virtual IP will be automatically assigned by the server"
+exec ./ToyVpnPing "$SERVER_IP" "$SERVER_PORT" "$SECRET" "$REMOTE_VIP"
