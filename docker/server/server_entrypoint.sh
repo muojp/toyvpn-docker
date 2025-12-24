@@ -1,5 +1,5 @@
 #!/bin/bash
-# server_entrypoint.sh
+# server_entrypoint.sh - Rust version
 
 # IPフォワーディング有効化
 echo 1 > /proc/sys/net/ipv4/ip_forward
@@ -12,6 +12,7 @@ ip link set tun0 up
 # NAT (MASQUERADE) 設定
 iptables -t nat -A POSTROUTING -s 172.31.0.0/24 -o eth0 -j MASQUERADE
 
-# サーバーの起動
-echo "Starting ToyVpnServer on tun0..."
-exec ./ToyVpnServer tun0 8000 test -m 1400 -a 172.31.0.2 32 -d 8.8.8.8 -r 0.0.0.0 0
+# サーバーの起動 (Rust版)
+echo "Starting ToyVPN Server (Rust) on tun0..."
+echo "RUST_LOG=${RUST_LOG:-info}"
+exec ./toyvpn-server tun0 8000 test -m 1400 -a 172.31.0.2 32 -d 8.8.8.8 -r 0.0.0.0 0

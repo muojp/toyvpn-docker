@@ -2,7 +2,7 @@
 FROM ubuntu:22.04 AS builder
 RUN apt-get update && apt-get install -y gcc g++ make
 WORKDIR /app
-COPY src/ToyVpnPing.c src/Makefile ./
+COPY legacy/ToyVpnPing.c legacy/Makefile ./
 RUN make ToyVpnPing
 
 FROM ubuntu:22.04

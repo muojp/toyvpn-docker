@@ -1,14 +1,39 @@
-# Server Image
-FROM ubuntu:22.04 AS builder
-RUN apt-get update && apt-get install -y gcc g++ make
-WORKDIR /app
-COPY src/ToyVpnServer.cpp src/Makefile ./
-RUN make ToyVpnServer
+# Server Image - Rust version
+FROM rust:1.83-slim AS builder
 
-FROM ubuntu:22.04
-RUN apt-get update && apt-get install -y iptables iproute2 net-tools && rm -rf /var/lib/apt/lists/*
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
-COPY --from=builder /app/ToyVpnServer .
+
+# Copy Rust project
+COPY rust/Cargo.toml ./
+COPY rust/src/ ./src/
+
+# Build release binary
+RUN cargo build --release
+
+# Runtime image
+FROM ubuntu:22.04
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    iptables \
+    iproute2 \
+    net-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the compiled binary from builder
+COPY --from=builder /app/target/release/toyvpn-server .
 COPY docker/server/server_entrypoint.sh .
-RUN chmod +x server_entrypoint.sh
+
+RUN chmod +x server_entrypoint.sh toyvpn-server
+
+# Set environment for logging
+ENV RUST_LOG=info
+
 ENTRYPOINT ["./server_entrypoint.sh"]

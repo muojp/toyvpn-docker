@@ -1,0 +1,26 @@
+# Rust build artifacts
+rust/target/
+**/*.rs.bk
+
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+
+# Docker
+docker-compose.yml
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+
+# Testing scripts
+legacy/ToyVpnPing/
+
+# Build artifacts
+*.o
+ToyVpnServer
+ToyVpnClient

@@ -1,0 +1,28 @@
+# Rust build artifacts
+rust/target/
+rust/Cargo.lock
+**/*.rs.bk
+
+# C/C++ build artifacts
+legacy/*.o
+legacy/ToyVpnServer
+legacy/ToyVpnPing
+legacy/ToyVpnPing/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local

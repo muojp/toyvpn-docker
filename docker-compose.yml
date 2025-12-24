@@ -9,6 +9,8 @@ services:
     privileged: true
     cap_add:
       - NET_ADMIN
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
     ports:
       - "8000:8000/udp"
     networks:
