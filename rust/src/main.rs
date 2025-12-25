@@ -134,9 +134,29 @@ async fn handle_clients_to_tun(
                 .trim_end_matches('\0')
                 .trim();
 
-            if received_secret == config.secret {
+            if received_secret.is_empty() {
+                // Keep-alive request (empty secret)
                 let mut sessions = sessions.lock().await;
-                if let Some((virtual_ip, is_new)) = sessions.handle_handshake(client_addr) {
+                if let Some(session) = sessions.get_session(client_addr) {
+                    let virtual_ip = session.virtual_ip;
+
+                    // Send ACK with current parameters
+                    let params = build_client_parameters(virtual_ip, &config.parameters[4..]);
+
+                    if let Err(e) = socket.send_to(&params, client_addr).await {
+                        log::error!("Failed to send keep-alive ACK to {}: {}", client_addr, e);
+                    } else {
+                        log::debug!("Keep-alive ACK sent to {} (VIP: {})", client_addr, virtual_ip);
+                    }
+
+                    // Update activity timestamp
+                    sessions.update_activity(client_addr);
+                } else {
+                    log::debug!("Keep-alive from unknown client {} (ignored)", client_addr);
+                }
+            } else if received_secret == config.secret {
+                let mut sessions = sessions.lock().await;
+                if let Some((virtual_ip, _is_new)) = sessions.handle_handshake(client_addr) {
                     // Build client-specific parameters
                     let params = build_client_parameters(virtual_ip, &config.parameters[4..]);
 
@@ -147,22 +167,9 @@ async fn handle_clients_to_tun(
                             break;
                         }
                     }
-
-                    if is_new {
-                        log::info!(
-                            "New client handshake from {} - Assigned virtual IP: {}",
-                            client_addr,
-                            virtual_ip
-                        );
-                    } else {
-                        log::info!(
-                            "Reconnecting client from {} - Keeping virtual IP: {}",
-                            client_addr,
-                            virtual_ip
-                        );
-                    }
+                    // Logging is done in handle_handshake()
                 } else {
-                    log::error!("Failed to allocate IP for client {}", client_addr);
+                    log::error!("Failed to allocate IP for client {}", client_addr.ip());
                 }
             } else {
                 log::warn!(

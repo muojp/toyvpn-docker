@@ -4,26 +4,26 @@ use std::time::{Duration, Instant};
 use crate::ip_pool::IpPool;
 
 /// Unique identifier for a client session
-/// Uses client's physical address (IP:port) as the key
+/// Uses client's IP address (not port) as the key to handle reconnections
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SessionKey {
-    addr: SocketAddr,
+    ip: std::net::IpAddr,
 }
 
 impl SessionKey {
     pub fn new(addr: SocketAddr) -> Self {
-        Self { addr }
+        Self { ip: addr.ip() }
     }
 
     #[allow(dead_code)]
-    pub fn addr(&self) -> SocketAddr {
-        self.addr
+    pub fn ip(&self) -> std::net::IpAddr {
+        self.ip
     }
 }
 
 impl std::fmt::Display for SessionKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.addr)
+        write!(f, "{}", self.ip)
     }
 }
 
@@ -68,12 +68,26 @@ impl SessionManager {
 
         // Check if session already exists
         if let Some(session) = self.sessions.get_mut(&key) {
+            // Update physical address (port may have changed)
+            let old_addr = session.addr;
+            session.addr = client_addr;
             session.last_active = now;
-            log::info!(
-                "Reconnecting client from {} - Keeping virtual IP: {}",
-                client_addr,
-                session.virtual_ip
-            );
+
+            if old_addr.port() != client_addr.port() {
+                log::info!(
+                    "Reconnecting client from {} (port changed: {} -> {}) - Keeping virtual IP: {}",
+                    client_addr.ip(),
+                    old_addr.port(),
+                    client_addr.port(),
+                    session.virtual_ip
+                );
+            } else {
+                log::info!(
+                    "Reconnecting client from {} - Keeping virtual IP: {}",
+                    client_addr,
+                    session.virtual_ip
+                );
+            }
             return Some((session.virtual_ip, false));
         }
 
@@ -102,6 +116,8 @@ impl SessionManager {
     pub fn update_activity(&mut self, client_addr: SocketAddr) {
         let key = SessionKey::new(client_addr);
         if let Some(session) = self.sessions.get_mut(&key) {
+            // Update physical address (port may have changed)
+            session.addr = client_addr;
             session.last_active = Instant::now();
         }
     }
@@ -146,7 +162,7 @@ impl SessionManager {
         if let Some(session) = self.sessions.remove(&key) {
             self.routing_table.remove(&session.virtual_ip);
             self.ip_pool.free(session.virtual_ip);
-            log::info!("Client disconnected: {} (freed IP: {})", client_addr, session.virtual_ip);
+            log::info!("Client disconnected: {} (freed IP: {})", client_addr.ip(), session.virtual_ip);
             true
         } else {
             false
