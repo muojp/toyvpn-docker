@@ -1,4 +1,4 @@
-# ToyVpn-docker (Rust Server + C Client)
+# ToyVpn-mod (Rust Server + C Client)
 
 A Docker-based VPN testing environment with a Rust server implementation.
 
@@ -31,7 +31,7 @@ The server has been rewritten in Rust with the following improvements:
 ## Project Structure
 
 ```
-toyvpn-docker/
+toyvpn-mod/
 ├── rust/              # Rust implementation (active)
 │   ├── Cargo.toml
 │   └── src/
@@ -152,6 +152,100 @@ docker compose down
 - **VPN Virtual Subnet**: `172.31.0.0/24`
   - Server Virtual IP: `172.31.0.1`
   - Client Virtual IPs: Automatically assigned starting from `172.31.0.2` (increments for each new client)
+
+## iptables Configuration (Automatic)
+
+The VPN server automatically configures iptables for routing and NAT when started. The configuration is handled by `docker/server/server_entrypoint.sh` and includes:
+
+### 1. Enable IP Forwarding
+```bash
+echo 1 > /proc/sys/net/ipv4/ip_forward
+```
+
+### 2. Create and Configure TUN Interface
+```bash
+ip tuntap add dev tun0 mode tun
+ip addr add 172.31.0.1/24 dev tun0
+ip link set tun0 up
+```
+
+### 3. Configure NAT with MASQUERADE
+```bash
+iptables -t nat -A POSTROUTING -s 172.31.0.0/24 -o eth0 -j MASQUERADE
+```
+
+This MASQUERADE rule enables NAT for packets from the VPN subnet (`172.31.0.0/24`) going out through the `eth0` interface, allowing VPN clients to access external networks.
+
+### Systemd Installation (Recommended for Production)
+
+For running the VPN server as a systemd service on a Linux host (outside Docker), use the provided installation script. The script will build the binary as your regular user, then request sudo privileges only for the installation steps:
+
+```bash
+# Install and configure the server as a systemd service (no sudo needed initially)
+./install-server.sh
+```
+
+This will:
+- Build the Rust binary in release mode
+- Install the binary to `/opt/toyvpn-server/`
+- Create a systemd service file at `/etc/systemd/system/toyvpn-server.service`
+- Configure IP forwarding permanently
+- Set up automatic TUN interface creation and iptables NAT rules
+
+After installation:
+```bash
+# Start the service
+sudo systemctl start toyvpn-server
+
+# Check status
+sudo systemctl status toyvpn-server
+
+# View logs
+sudo journalctl -u toyvpn-server -f
+
+# Stop the service
+sudo systemctl stop toyvpn-server
+```
+
+To uninstall:
+```bash
+sudo ./uninstall-server.sh
+```
+
+**Important**: Before installing, check your external network interface name (e.g., `eth0`, `ens33`, `enp0s3`) and edit the `EXTERNAL_INTERFACE` variable in `install-server.sh` if needed. You can find your interface name with:
+```bash
+ip addr show
+```
+
+### Manual Configuration (Outside Docker)
+
+If you prefer to run the server manually without systemd, you need to configure these settings yourself:
+
+```bash
+# Enable IP forwarding
+sudo sysctl -w net.ipv4.ip_forward=1
+
+# Create TUN interface
+sudo ip tuntap add dev tun0 mode tun
+sudo ip addr add 172.31.0.1/24 dev tun0
+sudo ip link set tun0 up
+
+# Configure NAT (replace eth0 with your external interface)
+sudo iptables -t nat -A POSTROUTING -s 172.31.0.0/24 -o eth0 -j MASQUERADE
+
+# Run the server
+sudo ./target/release/toyvpn-server tun0 8000 test -m 1400 -a 172.31.0.2 32 -d 8.8.8.8 -r 0.0.0.0 0
+```
+
+To make IP forwarding persistent across reboots, edit `/etc/sysctl.conf`:
+```bash
+net.ipv4.ip_forward = 1
+```
+
+Then apply the changes:
+```bash
+sudo sysctl -p
+```
 
 ## Development
 
