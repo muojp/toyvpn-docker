@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
     log::info!("TUN device '{}' created", tun.name());
 
     // Create UDP socket
-    let bind_addr: SocketAddr = format!("[::]:{}", config.port).parse()?;
+    let bind_addr: SocketAddr = format!("0.0.0.0:{}", config.port).parse()?;
     let socket = UdpSocket::bind(bind_addr)
         .await
         .context("Failed to bind UDP socket")?;
